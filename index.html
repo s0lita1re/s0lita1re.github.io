@@ -1,10 +1,343 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>s0lita1re 的个人空间</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+    <title>迅雷评论区探测器 - 原生纯享版</title>
+    <style>
+        /* 原汁原味 H5 风格：系统默认字体，轻量阴影，干净排版 */
+        :root {
+            --bg-color: #f9f9fa;
+            --border-color: #e1e4e8;
+            --text-main: #24292e;
+            --text-muted: #586069;
+            --accent-color: #0366d6;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .header-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        button {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #005cc5; }
+        button:disabled { background-color: #94b8e0; cursor: not-allowed; }
+        
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+        }
+        select {
+            padding: 6px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+
+        /* 评论区样式 */
+        .comment-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 15px;
+            display: flex;
+            gap: 15px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+        }
+        .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background-color: #eee;
+            object-fit: cover;
+        }
+        .comment-content { flex: 1; }
+        .meta-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 5px;
+        }
+        .username { font-weight: bold; color: var(--accent-color); }
+        .vip-tag {
+            background: #ffe4e1;
+            color: #d73a49;
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+        .meta-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
+        .text-body { font-size: 15px; word-break: break-all; margin-bottom: 10px; }
+        
+        .reply-box {
+            background: #f6f8fa;
+            padding: 10px;
+            border-left: 3px solid var(--border-color);
+            border-radius: 0 4px 4px 0;
+            font-size: 13px;
+            margin-top: 10px;
+        }
+        .reply-user { font-weight: bold; color: #2ea44f; }
+    </style>
 </head>
 <body>
-    <h1>你好，世界！</h1>
-    <p>这是 s0lita1re 的第一个 GitHub 网页。</p>
+
+    <div class="header-card">
+        <h2>🧲 迅雷评论探测器 (Web版)</h2>
+        <div class="input-group">
+            <input type="text" id="magnetInput" value="magnet:?xt=urn:btih:AA9FB8CAE3342F530765353400EE79DA84A451C7" placeholder="输入磁力链接或 Info Hash">
+            <button id="fetchBtn" onclick="startFetch()">一键提取</button>
+        </div>
+        <div class="controls">
+            <span id="statusText" style="color: var(--text-muted);">就绪</span>
+            <div>
+                排序方式：
+                <select id="sortSelect" onchange="renderComments()">
+                    <option value="default">默认 (按接口返回)</option>
+                    <option value="likes">👍 点赞数最多</option>
+                    <option value="speed">🚀 速度最快</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div id="resultsArea"></div>
+
+    <script>
+        let allComments = []; // 存储所有拉取到的评论数据
+        let jsonpCounter = 0; // 用于生成唯一的 JSONP 回调函数名
+
+        // 提取 40 位 Info Hash
+        function extractHash(text) {
+            const match = text.match(/urn:btih:([a-zA-Z0-9]{40})/i);
+            if (match) return match[1].toUpperCase();
+            if (text.length === 40 && /^[a-zA-Z0-9]+$/.test(text)) return text.toUpperCase();
+            return null;
+        }
+
+        // 封装 JSONP 请求返回 Promise
+        function fetchJSONP(url) {
+            return new Promise((resolve, reject) => {
+                const callbackName = 'jsonp_cb_' + (++jsonpCounter);
+                const script = document.createElement('script');
+                
+                // 将回调函数名追加到 URL
+                const finalUrl = url + (url.includes('?') ? '&' : '?') + '_callback=' + callbackName;
+                
+                window[callbackName] = function(data) {
+                    resolve(data);
+                    cleanup();
+                };
+
+                script.onerror = () => {
+                    reject(new Error("JSONP 请求失败，可能是网络问题或接口已失效。"));
+                    cleanup();
+                };
+
+                script.src = finalUrl;
+                document.head.appendChild(script);
+
+                function cleanup() {
+                    delete window[callbackName];
+                    document.head.removeChild(script);
+                }
+            });
+        }
+
+        // 解析速度字符串转为数字 (KB/s) 方便排序
+        function parseSpeedToNum(speedStr) {
+            if (!speedStr) return 0;
+            const num = parseFloat(speedStr);
+            if (isNaN(num)) return 0;
+            if (speedStr.toUpperCase().includes('MB')) return num * 1024;
+            if (speedStr.toUpperCase().includes('GB')) return num * 1024 * 1024;
+            return num;
+        }
+
+        // 格式化时间戳
+        function formatTime(ts) {
+            if (!ts) return "未知时间";
+            const date = new Date(String(ts).length === 13 ? parseInt(ts) : parseInt(ts) * 1000);
+            return date.toLocaleString();
+        }
+
+        async function startFetch() {
+            const input = document.getElementById('magnetInput').value.trim();
+            const hash = extractHash(input);
+            const btn = document.getElementById('fetchBtn');
+            const status = document.getElementById('statusText');
+
+            if (!hash) {
+                alert("未能识别到有效的 40 位 Info Hash！");
+                return;
+            }
+
+            btn.disabled = true;
+            status.innerText = "正在通过 JSONP 探测目标雷区...";
+            allComments = [];
+            document.getElementById('resultsArea').innerHTML = '';
+
+            try {
+                // 第一阶段：请求首屏速度排行榜
+                const urlSpeed = `https://api-xl9-ssl.xunlei.com/pc/mcomment/comment/list/speed?tid=${hash}&clientV=10.1.29.698&deviceId=70B5E8492A27GIBQ&jsL2S=1&noxluid=1`;
+                const speedData = await fetchJSONP(urlSpeed);
+                
+                if (speedData.CommentSpeedRanks) {
+                    speedData.CommentSpeedRanks.forEach(item => {
+                        allComments.push({
+                            name: item.nikeName || "匿名",
+                            avatar: item.portrait || "https://img.yzcdn.cn/vant/cat.jpeg", // 给个默认猫猫头像
+                            content: item.content || "",
+                            speedStr: item.speed || "0.00KB/s",
+                            speedNum: parseSpeedToNum(item.speed),
+                            likes: item.praiseCount || 0,
+                            isVip: false,
+                            vipLevel: "0",
+                            location: "未知",
+                            time: "",
+                            replies: []
+                        });
+                    });
+                }
+
+                // 第二阶段：请求常规评论（这里演示只拉取第一页，你可以根据 Python 逻辑写成 while 循环加载更多）
+                status.innerText = "正在获取评论区详情...";
+                // 注意：这里为了防止死循环卡死页面，目前只拉取一页。实战中可以改为“点击加载下一页”的交互
+                let lastId = speedData.CommentSpeedRanks && speedData.CommentSpeedRanks.length > 0 
+                             ? speedData.CommentSpeedRanks[speedData.CommentSpeedRanks.length - 1].cid : "";
+                
+                const urlComments = `https://api-xl9-ssl.xunlei.com/slcmt/comment/api/comment_v2?tid=${hash}&source_id=${hash}&type_id=4&last_id=${lastId}&type=loadmore&page_size=20&category=new&v=1.0`;
+                const commentsData = await fetchJSONP(urlComments);
+
+                if (commentsData.conmments) {
+                    commentsData.conmments.forEach(item => {
+                        const u = item.user_info || {};
+                        const c = item.comment_info || {};
+                        
+                        let isVip = false, vipLevel = "0";
+                        if (u.vip_extra) {
+                            const vipInfo = u.vip_extra.find(v => v.isVIP === "1");
+                            if (vipInfo) { isVip = true; vipLevel = vipInfo.VIPLevel; }
+                        }
+
+                        allComments.push({
+                            name: u.nick_name || "匿名",
+                            avatar: c.userImg || u.portrait_url || "https://img.yzcdn.cn/vant/cat.jpeg",
+                            content: c.comment || "",
+                            speedStr: c.downLoadSpeed || "0.00KB/s",
+                            speedNum: parseSpeedToNum(c.downLoadSpeed),
+                            likes: c.gcount || 0,
+                            isVip: isVip,
+                            vipLevel: vipLevel,
+                            location: (u.province || "") + (u.city || "") || "未知地域",
+                            time: formatTime(c.time),
+                            replies: c.replys || []
+                        });
+                    });
+                }
+
+                status.innerText = `探测完毕，共捕获 ${allComments.length} 条线索。`;
+                renderComments();
+
+            } catch (err) {
+                status.innerText = "请求异常，可能是接口变更或网络被拦截。";
+                console.error(err);
+                alert(err.message);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // 渲染评论到页面
+        function renderComments() {
+            const container = document.getElementById('resultsArea');
+            container.innerHTML = '';
+            
+            if (allComments.length === 0) {
+                container.innerHTML = '<div style="text-align:center; padding: 40px; color: #999;">该磁力链接暂无评论或无人带路。</div>';
+                return;
+            }
+
+            // 执行排序逻辑
+            const sortMode = document.getElementById('sortSelect').value;
+            let displayData = [...allComments];
+            if (sortMode === 'likes') {
+                displayData.sort((a, b) => b.likes - a.likes);
+            } else if (sortMode === 'speed') {
+                displayData.sort((a, b) => b.speedNum - a.speedNum);
+            }
+
+            // 构建 DOM
+            displayData.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'comment-item';
+
+                let vipHtml = item.isVip ? `<span class="vip-tag">VIP ${item.vipLevel}</span>` : '';
+                let timeHtml = item.time ? ` | ⏱️ ${item.time}` : '';
+                
+                let repliesHtml = '';
+                item.replies.forEach(r => {
+                    repliesHtml += `<div class="reply-box">
+                        <span class="reply-user">↳ 🗣️ ${r.user}:</span> ${r.content}
+                    </div>`;
+                });
+
+                div.innerHTML = `
+                    <img src="${item.avatar}" class="avatar" alt="avatar" loading="lazy" onerror="this.src='https://img.yzcdn.cn/vant/cat.jpeg'">
+                    <div class="comment-content">
+                        <div class="meta-header">
+                            <span class="username">${item.name}</span>
+                            ${vipHtml}
+                        </div>
+                        <div class="meta-sub">
+                            📍 ${item.location} | 🚀 ${item.speedStr} | 👍 ${item.likes} ${timeHtml}
+                        </div>
+                        <div class="text-body">
+                            ${item.content}
+                        </div>
+                        ${repliesHtml}
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+    </script>
 </body>
 </html>
