@@ -4,15 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
-    <title>迅雷评论区探测器 - 原生纯享版</title>
+    <title>迅雷评论区探测器 - 找码神器版</title>
     <style>
-        /* 原汁原味 H5 风格：系统默认字体，轻量阴影，干净排版 */
+        /* 原汁原味 H5 风格 */
         :root {
             --bg-color: #f9f9fa;
             --border-color: #e1e4e8;
             --text-main: #24292e;
             --text-muted: #586069;
             --accent-color: #0366d6;
+            --success-color: #2ea44f;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -44,7 +45,7 @@
             font-family: monospace;
             font-size: 14px;
         }
-        button {
+        button.primary-btn {
             background-color: var(--accent-color);
             color: white;
             border: none;
@@ -54,8 +55,8 @@
             font-weight: bold;
             transition: background 0.2s;
         }
-        button:hover { background-color: #005cc5; }
-        button:disabled { background-color: #94b8e0; cursor: not-allowed; }
+        button.primary-btn:hover { background-color: #005cc5; }
+        button.primary-btn:disabled { background-color: #94b8e0; cursor: not-allowed; }
         
         .controls {
             display: flex;
@@ -67,6 +68,7 @@
             padding: 6px;
             border-radius: 4px;
             border: 1px solid var(--border-color);
+            cursor: pointer;
         }
 
         /* 评论区样式 */
@@ -79,6 +81,7 @@
             display: flex;
             gap: 15px;
             box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+            position: relative;
         }
         .avatar {
             width: 48px;
@@ -87,7 +90,7 @@
             background-color: #eee;
             object-fit: cover;
         }
-        .comment-content { flex: 1; }
+        .comment-content { flex: 1; min-width: 0; }
         .meta-header {
             display: flex;
             align-items: center;
@@ -104,17 +107,55 @@
             font-weight: bold;
         }
         .meta-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
-        .text-body { font-size: 15px; word-break: break-all; margin-bottom: 10px; }
         
-        .reply-box {
+        .text-body-wrapper {
             background: #f6f8fa;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
             padding: 10px;
-            border-left: 3px solid var(--border-color);
-            border-radius: 0 4px 4px 0;
-            font-size: 13px;
-            margin-top: 10px;
+            margin-bottom: 10px;
+            position: relative;
         }
-        .reply-user { font-weight: bold; color: #2ea44f; }
+        .text-body { 
+            font-size: 15px; 
+            word-break: break-all; 
+            white-space: pre-wrap;
+            margin-right: 60px; /* 给右侧复制按钮留出空间 */
+        }
+        
+        /* 复制按钮样式 */
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        .copy-btn:hover {
+            border-color: var(--text-muted);
+            color: var(--text-main);
+        }
+        .copy-btn.copied {
+            color: var(--success-color);
+            border-color: var(--success-color);
+        }
+
+        .reply-box {
+            background: #fff;
+            padding: 8px 10px;
+            border-left: 3px solid var(--border-color);
+            font-size: 13px;
+            margin-top: 5px;
+            color: var(--text-muted);
+        }
+        .reply-user { font-weight: bold; color: var(--success-color); }
     </style>
 </head>
 <body>
@@ -122,17 +163,18 @@
     <div class="header-card">
         <h2>🧲 迅雷评论探测器 (Web版)</h2>
         <div class="input-group">
-            <input type="text" id="magnetInput" value="magnet:?xt=urn:btih:AA9FB8CAE3342F530765353400EE79DA84A451C7" placeholder="输入磁力链接或 Info Hash">
-            <button id="fetchBtn" onclick="startFetch()">一键提取</button>
+            <input type="text" id="magnetInput" value="" placeholder="在此粘贴磁力链接或 40 位 Info Hash...">
+            <button id="fetchBtn" class="primary-btn" onclick="startFetch()">探测密码</button>
         </div>
         <div class="controls">
-            <span id="statusText" style="color: var(--text-muted);">就绪</span>
+            <span id="statusText" style="color: var(--text-muted);">准备就绪，请发车。</span>
             <div>
                 排序方式：
                 <select id="sortSelect" onchange="renderComments()">
-                    <option value="default">默认 (按接口返回)</option>
-                    <option value="likes">👍 点赞数最多</option>
+                    <option value="likes" selected>👍 群众推荐 (点赞最多)</option>
+                    <option value="time">⏱️ 最新发布 (时间倒序)</option>
                     <option value="speed">🚀 速度最快</option>
+                    <option value="default">🔀 默认抓取顺序</option>
                 </select>
             </div>
         </div>
@@ -141,10 +183,9 @@
     <div id="resultsArea"></div>
 
     <script>
-        let allComments = []; // 存储所有拉取到的评论数据
-        let jsonpCounter = 0; // 用于生成唯一的 JSONP 回调函数名
+        let allComments = []; 
+        let jsonpCounter = 0; 
 
-        // 提取 40 位 Info Hash
         function extractHash(text) {
             const match = text.match(/urn:btih:([a-zA-Z0-9]{40})/i);
             if (match) return match[1].toUpperCase();
@@ -152,28 +193,22 @@
             return null;
         }
 
-        // 封装 JSONP 请求返回 Promise
         function fetchJSONP(url) {
             return new Promise((resolve, reject) => {
                 const callbackName = 'jsonp_cb_' + (++jsonpCounter);
                 const script = document.createElement('script');
-                
-                // 将回调函数名追加到 URL
                 const finalUrl = url + (url.includes('?') ? '&' : '?') + '_callback=' + callbackName;
                 
                 window[callbackName] = function(data) {
                     resolve(data);
                     cleanup();
                 };
-
                 script.onerror = () => {
-                    reject(new Error("JSONP 请求失败，可能是网络问题或接口已失效。"));
+                    reject(new Error("请求失败或超时。"));
                     cleanup();
                 };
-
                 script.src = finalUrl;
                 document.head.appendChild(script);
-
                 function cleanup() {
                     delete window[callbackName];
                     document.head.removeChild(script);
@@ -181,7 +216,6 @@
             });
         }
 
-        // 解析速度字符串转为数字 (KB/s) 方便排序
         function parseSpeedToNum(speedStr) {
             if (!speedStr) return 0;
             const num = parseFloat(speedStr);
@@ -191,11 +225,26 @@
             return num;
         }
 
-        // 格式化时间戳
         function formatTime(ts) {
             if (!ts) return "未知时间";
             const date = new Date(String(ts).length === 13 ? parseInt(ts) : parseInt(ts) * 1000);
             return date.toLocaleString();
+        }
+
+        // 复制文本到剪贴板的优雅实现
+        function copyToClipboard(btnElement, text) {
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = btnElement.innerText;
+                btnElement.innerText = "✔ 已复制";
+                btnElement.classList.add('copied');
+                
+                setTimeout(() => {
+                    btnElement.innerText = "复制";
+                    btnElement.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                alert("复制失败，请手动选择文本复制。");
+            });
         }
 
         async function startFetch() {
@@ -205,17 +254,17 @@
             const status = document.getElementById('statusText');
 
             if (!hash) {
-                alert("未能识别到有效的 40 位 Info Hash！");
+                alert("链接格式不对哦，请输入完整的磁力链接或 40 位 Hash 值！");
                 return;
             }
 
             btn.disabled = true;
-            status.innerText = "正在通过 JSONP 探测目标雷区...";
+            status.innerText = "正在探测目标雷区，寻找有效线索...";
             allComments = [];
             document.getElementById('resultsArea').innerHTML = '';
 
             try {
-                // 第一阶段：请求首屏速度排行榜
+                // 接口 1: 速度排行榜
                 const urlSpeed = `https://api-xl9-ssl.xunlei.com/pc/mcomment/comment/list/speed?tid=${hash}&clientV=10.1.29.698&deviceId=70B5E8492A27GIBQ&jsL2S=1&noxluid=1`;
                 const speedData = await fetchJSONP(urlSpeed);
                 
@@ -223,7 +272,7 @@
                     speedData.CommentSpeedRanks.forEach(item => {
                         allComments.push({
                             name: item.nikeName || "匿名",
-                            avatar: item.portrait || "https://img.yzcdn.cn/vant/cat.jpeg", // 给个默认猫猫头像
+                            avatar: item.portrait || "https://img.yzcdn.cn/vant/cat.jpeg",
                             content: item.content || "",
                             speedStr: item.speed || "0.00KB/s",
                             speedNum: parseSpeedToNum(item.speed),
@@ -232,18 +281,18 @@
                             vipLevel: "0",
                             location: "未知",
                             time: "",
+                            rawTime: 0, // 速度榜接口没有时间，设为0置底
                             replies: []
                         });
                     });
                 }
 
-                // 第二阶段：请求常规评论（这里演示只拉取第一页，你可以根据 Python 逻辑写成 while 循环加载更多）
-                status.innerText = "正在获取评论区详情...";
-                // 注意：这里为了防止死循环卡死页面，目前只拉取一页。实战中可以改为“点击加载下一页”的交互
+                // 接口 2: 最新评论分页
+                status.innerText = "正在深入评论区...";
                 let lastId = speedData.CommentSpeedRanks && speedData.CommentSpeedRanks.length > 0 
                              ? speedData.CommentSpeedRanks[speedData.CommentSpeedRanks.length - 1].cid : "";
                 
-                const urlComments = `https://api-xl9-ssl.xunlei.com/slcmt/comment/api/comment_v2?tid=${hash}&source_id=${hash}&type_id=4&last_id=${lastId}&type=loadmore&page_size=20&category=new&v=1.0`;
+                const urlComments = `https://api-xl9-ssl.xunlei.com/slcmt/comment/api/comment_v2?tid=${hash}&source_id=${hash}&type_id=4&last_id=${lastId}&type=loadmore&page_size=30&category=new&v=1.0`;
                 const commentsData = await fetchJSONP(urlComments);
 
                 if (commentsData.conmments) {
@@ -257,6 +306,12 @@
                             if (vipInfo) { isVip = true; vipLevel = vipInfo.VIPLevel; }
                         }
 
+                        // 提取原始时间戳用于精准排序
+                        let rTime = 0;
+                        if (c.time) {
+                            rTime = String(c.time).length === 13 ? parseInt(c.time) : parseInt(c.time) * 1000;
+                        }
+
                         allComments.push({
                             name: u.nick_name || "匿名",
                             avatar: c.userImg || u.portrait_url || "https://img.yzcdn.cn/vant/cat.jpeg",
@@ -268,12 +323,13 @@
                             vipLevel: vipLevel,
                             location: (u.province || "") + (u.city || "") || "未知地域",
                             time: formatTime(c.time),
+                            rawTime: rTime,
                             replies: c.replys || []
                         });
                     });
                 }
 
-                status.innerText = `探测完毕，共捕获 ${allComments.length} 条线索。`;
+                status.innerText = `探测完毕，共发现 ${allComments.length} 条评论。`;
                 renderComments();
 
             } catch (err) {
@@ -285,26 +341,28 @@
             }
         }
 
-        // 渲染评论到页面
         function renderComments() {
             const container = document.getElementById('resultsArea');
             container.innerHTML = '';
             
             if (allComments.length === 0) {
-                container.innerHTML = '<div style="text-align:center; padding: 40px; color: #999;">该磁力链接暂无评论或无人带路。</div>';
+                container.innerHTML = '<div style="text-align:center; padding: 40px; color: #999;">太干净了，没有任何评论。</div>';
                 return;
             }
 
-            // 执行排序逻辑
+            // 获取当前下拉框的排序模式
             const sortMode = document.getElementById('sortSelect').value;
             let displayData = [...allComments];
+            
+            // 核心排序逻辑
             if (sortMode === 'likes') {
                 displayData.sort((a, b) => b.likes - a.likes);
             } else if (sortMode === 'speed') {
                 displayData.sort((a, b) => b.speedNum - a.speedNum);
+            } else if (sortMode === 'time') {
+                displayData.sort((a, b) => b.rawTime - a.rawTime);
             }
 
-            // 构建 DOM
             displayData.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'comment-item';
@@ -319,6 +377,9 @@
                     </div>`;
                 });
 
+                // 为防止 XSS 攻击或引号冲突，对 content 进行简单的转义处理后再放入 onclick
+                const safeContent = item.content.replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n');
+
                 div.innerHTML = `
                     <img src="${item.avatar}" class="avatar" alt="avatar" loading="lazy" onerror="this.src='https://img.yzcdn.cn/vant/cat.jpeg'">
                     <div class="comment-content">
@@ -329,8 +390,9 @@
                         <div class="meta-sub">
                             📍 ${item.location} | 🚀 ${item.speedStr} | 👍 ${item.likes} ${timeHtml}
                         </div>
-                        <div class="text-body">
-                            ${item.content}
+                        <div class="text-body-wrapper">
+                            <div class="text-body">${item.content}</div>
+                            <button class="copy-btn" onclick="copyToClipboard(this, '${safeContent}')">复制</button>
                         </div>
                         ${repliesHtml}
                     </div>
