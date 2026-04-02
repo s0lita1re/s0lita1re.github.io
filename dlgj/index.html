@@ -1,1 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>大连公交实时查询</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-light: #dbeafe;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --bus-up: #10b981; /* 上行颜色 */
+            --bus-down: #f59e0b; /* 下行颜色 */
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            margin: 0;
+            padding: 15px;
+            display: flex;
+            justify-content: center;
+        }
+        .app-container {
+            width: 100%;
+            max-width: 500px;
+            background: var(--card-bg);
+            border-radius: 16px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            overflow: hidden;
+            min-height: 90vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: var(--primary);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 { margin: 0; font-size: 20px; }
+        .search-box {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 10px;
+        }
+        .search-box input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .search-box input:focus { border-color: var(--primary); }
+        .search-box button {
+            padding: 0 20px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .search-box button:active { opacity: 0.8; }
+        
+        .result-list {
+            padding: 15px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .bus-card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+        .bus-card:active { transform: scale(0.98); }
+        .bus-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .tag-up { background: var(--bus-up); color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+        .tag-down { background: var(--bus-down); color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+        
+        .bus-route { font-size: 14px; color: var(--text-main); margin-bottom: 8px; }
+        .bus-time { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+        .loading, .error-msg, .empty-msg { text-align: center; padding: 30px 15px; color: var(--text-muted); font-size: 14px; }
+    </style>
+</head>
+<body>
 
+<div class="app-container">
+    <div class="header">
+        <h1>🚌 大连公交实时查询</h1>
+    </div>
+    
+    <div class="search-box">
+        <input type="number" id="busNumber" placeholder="输入线路数字 (如: 26)" inputmode="numeric">
+        <button onclick="searchBus()">搜索</button>
+    </div>
+
+    <div class="result-list" id="resultList">
+        <div class="empty-msg">请输入线路号进行搜索</div>
+    </div>
+</div>
+
+<script>
+    // 【关键设置】：如果在 GitHub Pages 运行，必须配置 CORS 代理。
+    // 如果你在本地测试并开启了浏览器的跨域插件，可以将 PROXY_URL 设为空字符串 ""
+    // 例如使用 corsproxy.io 作为免费演示（生产环境建议自建 Cloudflare Worker）
+    const PROXY_URL = "https://corsproxy.io/?"; 
+    const TARGET_API = "https://ecx.dlmetro.com/bas/smartstation/v2/bas/bus/line/calendar/list";
+
+    async function searchBus() {
+        const busNumber = document.getElementById('busNumber').value.trim();
+        const resultList = document.getElementById('resultList');
+        
+        if (!busNumber) {
+            alert('请输入要查询的公交线路！');
+            return;
+        }
+
+        resultList.innerHTML = '<div class="loading">正在连接大连交通枢纽... ⏳</div>';
+
+        try {
+            // 大连公交 API 请求体 (基于抓包推测的标准搜索结构)
+            const requestBody = {
+                keyword: busNumber,
+                city_id: "2102",
+                service_id: "02" 
+            };
+
+            const url = PROXY_URL ? PROXY_URL + encodeURIComponent(TARGET_API) : TARGET_API;
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json;charset=utf-8',
+                    'appId': 'A330120180000027',
+                    'deviceType': '0',
+                    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_2 like Mac OS X)',
+                    // 警告：这些是你抓包里的固定值。如果大连服务端验签严格，这些值失效后接口会报 400/401。
+                    // 'signature': 'F32gwCYB6qaq...', 
+                    // 'nonce': '...',
+                    // 'timestamp': '...'
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+            
+            const data = await response.json();
+            renderResults(data);
+
+        } catch (error) {
+            console.error('API 请求失败:', error);
+            resultList.innerHTML = `
+                <div class="error-msg">
+                    ❌ 查询失败<br><br>
+                    可能是由于浏览器跨域拦截，或接口签名验证已过期。<br>
+                    <span style="font-size: 12px;">建议检查控制台(F12)日志。</span>
+                </div>
+            `;
+        }
+    }
+
+    function renderResults(data) {
+        const resultList = document.getElementById('resultList');
+        resultList.innerHTML = '';
+
+        // 防御性解析数据结构 (根据你提供的 search.txt 结构推断)
+        let lines = [];
+        if (data && data.result && Array.isArray(data.result)) {
+            // 有些搜索接口外层套了一层站点信息，提取真正的 line_list 或直接是 line
+            data.result.forEach(item => {
+                if (item.line_list) {
+                    lines = lines.concat(item.line_list);
+                } else if (item.line_no) {
+                    lines.push(item);
+                }
+            });
+        }
+
+        if (lines.length === 0) {
+            resultList.innerHTML = '<div class="empty-msg">未找到该线路，请核对后重新输入 🚏</div>';
+            return;
+        }
+
+        let html = '';
+        lines.forEach(route => {
+            const lineNo = route.line_no || route.line_name;
+            const lineName = route.line_name || '未知线路';
+
+            // 渲染上行卡片 (01)
+            if (route.up_end_station_name) {
+                html += `
+                    <div class="bus-card" onclick="goToDetail('${route.line_no}', '01', '${route.up_end_station_name}')">
+                        <div class="bus-card-header">
+                            <span>${lineName}</span>
+                            <span class="tag-up">上行</span>
+                        </div>
+                        <div class="bus-route">🏁 开往: ${route.up_end_station_name}</div>
+                        <div class="bus-time">⏱️ 首末班: ${route.up_op_start_time || '未知'} - ${route.up_op_end_time || '未知'}</div>
+                    </div>
+                `;
+            }
+
+            // 渲染下行卡片 (02)
+            if (route.down_end_station_name) {
+                html += `
+                    <div class="bus-card" onclick="goToDetail('${route.line_no}', '02', '${route.down_end_station_name}')">
+                        <div class="bus-card-header">
+                            <span>${lineName}</span>
+                            <span class="tag-down">下行</span>
+                        </div>
+                        <div class="bus-route">🏁 开往: ${route.down_end_station_name}</div>
+                        <div class="bus-time">⏱️ 首末班: ${route.down_op_start_time || '未知'} - ${route.down_op_end_time || '未知'}</div>
+                    </div>
+                `;
+            }
+        });
+
+        resultList.innerHTML = html || '<div class="empty-msg">线路数据解析异常</div>';
+    }
+
+    function goToDetail(lineNo, direction, endStation) {
+        // 跳转到我们未来要写的详情页，带上必需的参数
+        const params = new URLSearchParams({
+            line_no: lineNo,
+            up_down_type: direction,
+            end_station: endStation
+        });
+        window.location.href = `detail.html?${params.toString()}`;
+    }
+
+    // 支持回车搜索
+    document.getElementById('busNumber').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') searchBus();
+    });
+</script>
+
+</body>
+</html>
